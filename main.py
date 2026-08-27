@@ -21,7 +21,7 @@ from interpreter_knowledge import get_relevant_knowledge
 # ─── ENVIRONMENT LOAD ───────────────────────────────
 load_dotenv()
 
-GROQ_KEY = os.getenv("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", "").strip().strip("'").strip('"')
+GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip().strip("'").strip('"')
 
 if not GROQ_KEY or "your_actual" in GROQ_KEY or len(GROQ_KEY) < 10:
     print("❌ ERROR: GROQ_API_KEY is missing from environment variables!")
