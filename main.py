@@ -1,6 +1,6 @@
 """
 Littlestar AI - FastAPI Backend Server
-Serves chat.html directly from the root directory (no static folder needed)
+With Explicit Render Setup Diagnostics
 """
 
 import os
@@ -8,6 +8,7 @@ import re
 import time
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Optional
@@ -20,22 +21,21 @@ from interpreter_knowledge import get_relevant_knowledge
 # ─── ENVIRONMENT LOAD ───────────────────────────────
 load_dotenv()
 
-GROQ_KEY = os.getenv("GROQ_API_KEY")
+GROQ_KEY = os.getenv("GROQ_API_KEY", "").strip().strip("'").strip('"')
 
-if not GROQ_KEY or "your_actual" in GROQ_KEY:
-    print("❌ ERROR: GROQ_API_KEY missing or invalid in .env!")
+if not GROQ_KEY or "your_actual" in GROQ_KEY or len(GROQ_KEY) < 10:
+    print("❌ ERROR: GROQ_API_KEY is missing from environment variables!")
     groq_client = None
 else:
-    GROQ_KEY = GROQ_KEY.strip().strip("'").strip('"')
-    groq_client = Groq(api_key=GROQ_KEY)
-    print("⚡ Littlestar AI connected to Groq Engine!")
+    try:
+        groq_client = Groq(api_key=GROQ_KEY)
+        print("⚡ Littlestar AI connected to Groq Engine!")
+    except Exception as e:
+        print(f"❌ Groq Init Error: {e}")
+        groq_client = None
 
-# ─── PATH RESOLUTION (Root Directory) ────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CHAT_HTML = os.path.join(BASE_DIR, "chat.html")
-INDEX_HTML = os.path.join(BASE_DIR, "index.html")
 
-# ─── FASTAPI APP CONFIG ─────────────────────────────
 app = FastAPI(title="Littlestar AI")
 
 app.add_middleware(
@@ -46,7 +46,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ─── DATA MODELS ────────────────────────────────────
 class Message(BaseModel):
     role: str
     content: str
@@ -68,7 +67,6 @@ STRICT_MODELS = [
 ]
 
 def prune_history_text(role: str, text: str) -> str:
-    """Strips bulky code blocks from past turns to keep tokens low"""
     if not text:
         return ""
     if role in ["assistant", "model"]:
@@ -80,28 +78,43 @@ def prune_history_text(role: str, text: str) -> str:
             text = text[:250] + "..."
     return text
 
-# ─── ROUTES ─────────────────────────────────────────
 @app.get("/")
 async def root():
-    # Looks for chat.html or index.html in the same root folder
-    if os.path.exists(CHAT_HTML):
-        return FileResponse(CHAT_HTML)
-    elif os.path.exists(INDEX_HTML):
-        return FileResponse(INDEX_HTML)
+    root_chat = os.path.join(BASE_DIR, "chat.html")
+    if os.path.exists(root_chat):
+        return FileResponse(root_chat)
+        
+    root_index = os.path.join(BASE_DIR, "index.html")
+    if os.path.exists(root_index):
+        return FileResponse(root_index)
+
+    static_chat = os.path.join(BASE_DIR, "static", "chat.html")
+    if os.path.exists(static_chat):
+        return FileResponse(static_chat)
+
     return {"message": "🌟 Littlestar AI Server Online"}
 
 @app.get("/health")
 async def health():
     return {
         "status": "online",
-        "groq_connected": groq_client is not None
+        "groq_connected": groq_client is not None,
+        "key_present": bool(GROQ_KEY and len(GROQ_KEY) > 10)
     }
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
+    # EXPLICIT ERROR IF KEY IS MISSING ON RENDER
+    if not GROQ_KEY or "your_actual" in GROQ_KEY or len(GROQ_KEY) < 10:
+        return ChatResponse(
+            reply="❌ **API Key Missing on Render:** Please go to Render Dashboard ➔ Environment ➔ Add `GROQ_API_KEY` with your key from console.groq.com/keys.",
+            success=False,
+            model_used="none"
+        )
+
     if not groq_client:
         return ChatResponse(
-            reply="❌ An error occurred. Please check server configuration.",
+            reply="❌ **Server Error:** Invalid GROQ_API_KEY format.",
             success=False,
             model_used="none"
         )
@@ -116,7 +129,7 @@ async def chat(request: ChatRequest):
 
     messages = [{"role": "system", "content": full_system_prompt}]
 
-    # 2. Add Pruned History (Last 2 turns / 4 messages max)
+    # 2. Add Pruned History
     recent_history = request.history[-4:] if request.history else []
     for h in recent_history:
         role = "assistant" if h.role in ["model", "assistant"] else "user"
@@ -153,9 +166,8 @@ async def chat(request: ChatRequest):
             time.sleep(0.2)
             continue
 
-    # Clean error response sent to user
     return ChatResponse(
-        reply="❌ An error occurred. Please wait a moment and try again.",
+        reply=f"❌ **Groq Connection Failed:** {last_error}",
         success=False,
         model_used="none"
     )
